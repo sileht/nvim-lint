@@ -46,7 +46,7 @@ function M.from_pattern(pattern, groups, severity_map, defaults)
   severity_map = severity_map or {}
   -- Like vim.diagnostic.match but also checks if a `file` group matches the buffer path
   -- Some linters produce diagnostics for the full project and this should only produce buffer diagnostics
-  local match = function(buffer_path, line)
+  local match = function(linter_cwd, buffer_path, line)
     local matches = { line:match(pattern) }
     if not next(matches) then
       return nil
@@ -56,7 +56,12 @@ function M.from_pattern(pattern, groups, severity_map, defaults)
       captures[groups[i]] = match
     end
     if captures.file then
-      local path = vim.fn.fnamemodify(captures.file, ':p')
+      local path
+      if vim.startswith(captures.file, '/') then
+        path = captures.file
+      else
+        path = vim.fn.simplify(linter_cwd .. '/' .. captures.file)
+      end
       if path ~= buffer_path then
         return nil
       end
@@ -83,11 +88,11 @@ function M.from_pattern(pattern, groups, severity_map, defaults)
     end
     return vim.tbl_extend('keep', diagnostic, defaults or {})
   end
-  return function(output, bufnr)
+  return function(output, bufnr, linter_cwd)
     local result = {}
     local buffer_path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ":p")
     for _, line in ipairs(vim.fn.split(output, '\n')) do
-      local diagnostic = match(buffer_path, line)
+      local diagnostic = match(linter_cwd, buffer_path, line)
       if diagnostic then
         table.insert(result, diagnostic)
       end
@@ -103,10 +108,10 @@ function M.accumulate_chunks(parse)
     on_chunk = function(chunk)
       table.insert(chunks, chunk)
     end,
-    on_done = function(publish, bufnr)
+    on_done = function(publish, bufnr, linter_cwd)
       vim.schedule(function()
         local output = table.concat(chunks)
-        local diagnostics = parse(output, bufnr)
+        local diagnostics = parse(output, bufnr, linter_cwd)
         publish(diagnostics, bufnr)
       end)
     end,

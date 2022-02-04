@@ -50,7 +50,7 @@ describe('from_pattern', function()
 foo:10:13 Big mistake
 bar:209:14 Bigger mistake
 ]]
-    local result = parser(output, 0)
+    local result = parser(output, 0, "/")
     local expected = {
       {
         message = 'Big mistake',

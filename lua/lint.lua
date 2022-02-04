@@ -2,69 +2,71 @@ local uv = vim.loop
 local api = vim.api
 local M = {}
 
-
-M.linters = setmetatable({}, {
-  __index = function(tbl, key)
-    local ok, linter = pcall(require, 'lint.linters.' .. key)
-    if ok then
-      rawset(tbl, key, linter)
+M.linters = setmetatable(
+{},
+    {
+    __index = function(tbl, key)
+      local ok, linter = pcall(require, "lint.linters." .. key)
+      if ok then
+        rawset(tbl, key, linter)
+      end
+      return linter
     end
-    return linter
-  end,
-})
-
+    }
+)
 
 M.linters_by_ft = {
-  text = {'vale',},
-  markdown = {'vale',},
-  rst = {'vale',},
-  ruby = {'ruby',},
-  inko = {'inko',},
-  clojure = {'clj-kondo',},
-  dockerfile = {'hadolint',},
+  text = { "vale" },
+  markdown = { "vale" },
+  rst = { "vale" },
+  ruby = { "ruby" },
+  inko = { "inko" },
+  clojure = { "clj-kondo" },
+  dockerfile = { "hadolint" }
 }
 
-local namespaces = setmetatable({}, {
-  __index = function(tbl, key)
-    local ns = api.nvim_create_namespace(key)
-    rawset(tbl, key, ns)
-    return ns
-  end
-})
+local namespaces =
+setmetatable(
+{},
+    {
+    __index = function(tbl, key)
+      local ns = api.nvim_create_namespace(key)
+      rawset(tbl, key, ns)
+      return ns
+    end
+    }
+)
 
-
-local function read_output(bufnr, parser, publish_fn)
+local function read_output(cwd, bufnr, parser, publish_fn)
   return function(err, chunk)
     assert(not err, err)
     if chunk then
       parser.on_chunk(chunk, bufnr)
     else
-      parser.on_done(publish_fn, bufnr)
+      parser.on_done(publish_fn, bufnr, cwd)
     end
   end
 end
 
-
-local function start_read(stream, stdout, stderr, bufnr, parser, ns)
+local function start_read(stream, cwd, stdout, stderr, bufnr, parser, ns)
   local publish = function(diagnostics)
     -- By the time the linter is finished the user might have deleted the buffer
     if api.nvim_buf_is_valid(bufnr) then
       vim.diagnostic.set(ns, bufnr, diagnostics)
     end
   end
-  if not stream or stream == 'stdout' then
-    stdout:read_start(read_output(bufnr, parser, publish))
-  elseif stream == 'stderr' then
-    stderr:read_start(read_output(bufnr, parser, publish))
-  elseif stream == 'both' then
-    local parser1, parser2 = require('lint.parser').split(parser)
-    stdout:read_start(read_output(bufnr, parser1, publish))
-    stderr:read_start(read_output(bufnr, parser2, publish))
+  if not stream or stream == "stdout" then
+    stdout:read_start(read_output(cwd, bufnr, parser, publish))
+  elseif stream == "stderr" then
+    stderr:read_start(read_output(cwd, bufnr, parser, publish))
+  elseif stream == "both" then
+    local parser1, parser2 = require("lint.parser").split(parser)
+    stdout:read_start(read_output(cwd, bufnr, parser1, publish))
+    stderr:read_start(read_output(cwd, bufnr, parser2, publish))
   else
-    error('Invalid `stream` setting: ' .. stream)
+    error("Invalid `stream` setting: " .. stream)
   end
 end
-
 
 function M._resolve_linter_by_ft(ft)
   local names = M.linters_by_ft[ft]
@@ -72,7 +74,7 @@ function M._resolve_linter_by_ft(ft)
     return names
   end
   local dedup_linters = {}
-  local filetypes = vim.split(ft, '.', { plain = true })
+  local filetypes = vim.split(ft, ".", { plain = true })
   for _, ft_ in pairs(filetypes) do
     local linters = M.linters_by_ft[ft_]
     if linters then
@@ -84,11 +86,10 @@ function M._resolve_linter_by_ft(ft)
   return vim.tbl_keys(dedup_linters)
 end
 
-
-function M.try_lint(names)
+function M.try_lint(names, opts)
   assert(
-    vim.diagnostic,
-    "nvim-lint requires neovim 0.6.0+. If you're using an older version, use the `nvim-05` tag of nvim-lint'"
+  vim.diagnostic,
+      "nvim-lint requires neovim 0.6.0+. If you're using an older version, use the `nvim-05` tag of nvim-lint'"
   )
   if type(names) == "string" then
     names = { names }
@@ -99,7 +100,7 @@ function M.try_lint(names)
 
   local lookup_linter = function(name)
     local linter = M.linters[name]
-    assert(linter, 'Linter with name `' .. name .. '` not available')
+    assert(linter, "Linter with name `" .. name .. "` not available")
     if type(linter) == "function" then
       linter = linter()
     end
@@ -108,25 +109,23 @@ function M.try_lint(names)
   end
   local linters = vim.tbl_map(lookup_linter, names)
   for _, linter in pairs(linters) do
-    local ok, err = pcall(M.lint, linter)
+    local ok, err = pcall(M.lint, linter, opts)
     if not ok then
       vim.notify(err, vim.log.levels.WARN)
     end
   end
 end
 
-
 local function eval_fn_or_id(x)
-  if type(x) == 'function' then
+  if type(x) == "function" then
     return x()
   else
     return x
   end
 end
 
-
-function M.lint(linter)
-  assert(linter, 'lint must be called with a linter')
+function M.lint(linter, opts)
+  assert(linter, "lint must be called with a linter")
   local stdin = uv.new_pipe(false)
   local stdout = uv.new_pipe(false)
   local stderr = uv.new_pipe(false)
@@ -135,6 +134,8 @@ function M.lint(linter)
   local pid_or_err
   local args = {}
   local bufnr = api.nvim_get_current_buf()
+  opts = opts or {}
+
   if linter.args then
     vim.list_extend(args, vim.tbl_map(eval_fn_or_id, linter.args))
   end
@@ -151,52 +152,54 @@ function M.lint(linter)
       table.insert(env, k .. "=" .. v)
     end
   end
-  local opts = {
+  local linter_opts = {
     args = args,
-    stdio = {stdin, stdout, stderr},
+    stdio = { stdin, stdout, stderr },
     env = env,
-    cwd = vim.fn.getcwd(),
+    cwd = opts.cwd or vim.fn.getcwd(),
     detached = false
   }
   local cmd = eval_fn_or_id(linter.cmd)
-  assert(cmd, 'Linter definition must have a `cmd` set: ' .. vim.inspect(linter))
-  handle, pid_or_err = uv.spawn(cmd, opts, function(code)
-    stdout:close()
-    stderr:close()
-    handle:close()
-    if code ~= 0 and not linter.ignore_exitcode then
-      print('Linter command', cmd, 'exited with code', code)
-    end
-  end)
-  assert(handle, 'Error running ' .. cmd .. ': ' .. pid_or_err)
+  assert(cmd, "Linter definition must have a `cmd` set: " .. vim.inspect(linter))
+  handle, pid_or_err = uv.spawn(
+  cmd,
+      linter_opts,
+      function(code)
+        stdout:close()
+        stderr:close()
+        handle:close()
+        if code ~= 0 and not linter.ignore_exitcode then
+          print("Linter command", cmd, "exited with code", code)
+        end
+      end
+  )
+  assert(handle, "Error running " .. cmd .. ": " .. pid_or_err)
   local parser = linter.parser
-  if type(parser) == 'function' then
-    parser = require('lint.parser').accumulate_chunks(parser)
+  if type(parser) == "function" then
+    parser = require("lint.parser").accumulate_chunks(parser)
   end
-  assert(
-    parser.on_chunk and type(parser.on_chunk == 'function'),
-    'Parser requires a `on_chunk` function'
-  )
-  assert(
-    parser.on_done and type(parser.on_done == 'function'),
-    'Parser requires a `on_done` function'
-  )
+  assert(parser.on_chunk and type(parser.on_chunk == "function"), "Parser requires a `on_chunk` function")
+  assert(parser.on_done and type(parser.on_done == "function"), "Parser requires a `on_done` function")
   local ns = namespaces[linter.name]
-  start_read(linter.stream, stdout, stderr, bufnr, parser, ns)
+  start_read(linter.stream, linter_opts.cwd, stdout, stderr, bufnr, parser, ns)
   if linter.stdin then
     local lines = vim.api.nvim_buf_get_lines(0, 0, -1, true)
     for _, line in ipairs(lines) do
-      stdin:write(line .. '\n')
+      stdin:write(line .. "\n")
     end
-    stdin:write('', function()
-      stdin:shutdown(function()
-        stdin:close()
-      end)
-    end)
+    stdin:write(
+    "",
+        function()
+          stdin:shutdown(
+          function()
+            stdin:close()
+          end
+          )
+        end
+    )
   else
     stdin:close()
   end
 end
-
 
 return M
